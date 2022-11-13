@@ -1,21 +1,58 @@
 #!/usr/bin/env node
+import { App, Duration, Stack, StackProps } from 'aws-cdk-lib';
+import { Schedule } from 'aws-cdk-lib/aws-applicationautoscaling';
+import { FargateService } from 'aws-cdk-lib/aws-ecs';
+import { Construct } from 'constructs';
 import 'source-map-support/register';
-import * as cdk from 'aws-cdk-lib';
-import { CdkDynamicStackPropsStack } from '../lib/cdk-dynamic-stack-props-stack';
+import { fixedCapacity, scheduledScalingFn } from './scaling-strategies';
 
-const app = new cdk.App();
-new CdkDynamicStackPropsStack(app, 'CdkDynamicStackPropsStack', {
-  /* If you don't specify 'env', this stack will be environment-agnostic.
-   * Account/Region-dependent features and context lookups will not work,
-   * but a single synthesized template can be deployed anywhere. */
+// Define what our stack is expecting from the scaling function.
+// It takes in a FargateService as a parameter, and doesn't
+// return anything. It only applies scaling methods on the
+// service.
+export type ScalingStrategy = (service: FargateService) => void;
 
-  /* Uncomment the next line to specialize this stack for the AWS Account
-   * and Region that are implied by the current CLI configuration. */
-  // env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+export interface FargateServiceStackProps extends StackProps {
+  scalingStrategy?: ScalingStrategy;
+}
 
-  /* Uncomment the next line if you know exactly what Account and Region you
-   * want to deploy the stack to. */
-  // env: { account: '123456789012', region: 'us-east-1' },
+export class FargateServiceStack extends Stack {
+  constructor(
+    scope: Construct,
+    id: string,
+    { scalingStrategy, ...props }: FargateServiceStackProps
+  ) {
+    super(scope, id, props);
 
-  /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
+    const fargateService = new FargateService(this, 'FargateService', {
+      /* FargateService Props */
+    });
+
+    // If there's a scaling strategy passed in to the stack,
+    // apply it to this service
+    if (scalingStrategy) {
+      scalingStrategy(fargateService);
+    }
+  }
+}
+
+const app = new App();
+
+new FargateServiceStack(app, 'FargateService-dev', {
+  scalingStrategy: fixedCapacity({ fixedCapacity: 10 }),
+});
+
+new FargateServiceStack(app, 'FargateService-prod', {
+  scalingStrategy: scheduledScalingFn({
+    scaleOutMinCapacity: 50,
+    scaleOutMaxCapacity: 200,
+    scaleOutSchedule: Schedule.cron({ hour: '10', minute: '00' }),
+    scaleInMinCapacity: 10,
+    scaleInMaxCapacity: 200,
+    scaleInSchedule: Schedule.cron({ hour: '14', minute: '00' }),
+    cpuUtilizationPct: 50,
+    memoryUtilizationPct: 50,
+    scaleInCooldown: Duration.minutes(2),
+    scaleOutCooldown: Duration.seconds(30),
+  }),
 });
